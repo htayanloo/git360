@@ -106,7 +106,7 @@ func (sp *StatusPane) View(styles Styles, width int, height int, focused bool) s
 	} else {
 		for i, file := range sp.StagedFiles {
 			isSelected := i == sp.Cursor
-			line := sp.formatFileLine(file, isSelected, focused, styles)
+			line := sp.formatFileLine(file, isSelected, focused, styles, width)
 			lines = append(lines, line)
 		}
 	}
@@ -124,7 +124,7 @@ func (sp *StatusPane) View(styles Styles, width int, height int, focused bool) s
 		for i, file := range sp.UnstagedFiles {
 			globalIdx := totalStaged + i
 			isSelected := globalIdx == sp.Cursor
-			line := sp.formatFileLine(file, isSelected, focused, styles)
+			line := sp.formatFileLine(file, isSelected, focused, styles, width)
 			lines = append(lines, line)
 		}
 	}
@@ -142,7 +142,7 @@ func (sp *StatusPane) View(styles Styles, width int, height int, focused bool) s
 	return sb.String()
 }
 
-func (sp *StatusPane) formatFileLine(file git.FileChange, isSelected bool, focused bool, styles Styles) string {
+func (sp *StatusPane) formatFileLine(file git.FileChange, isSelected bool, focused bool, styles Styles, width int) string {
 	// Status indicator formatting
 	var statusStyle lipgloss.Style
 	switch file.Status {
@@ -172,10 +172,16 @@ func (sp *StatusPane) formatFileLine(file git.FileChange, isSelected bool, focus
 		pathStr = fmt.Sprintf("%s -> %s", file.OldPath, file.Path)
 	}
 
+	// Safe truncation of the path to avoid line wrapping (leaving margin for checkbox/status prefix and borders)
+	maxPathLen := width - 12
+	if maxPathLen > 5 && len(pathStr) > maxPathLen {
+		pathStr = "..." + pathStr[len(pathStr)-maxPathLen+3:]
+	}
+
 	lineContent := fmt.Sprintf("  %s %s  %s", checkbox, statusIcon, pathStr)
 
 	if isSelected && focused {
-		return styles.SelectedLineStyle.Render(lineContent)
+		return styles.SelectedLineStyle.Width(width).Render(lineContent)
 	}
 	return styles.NormalLineStyle.Render(lineContent)
 }

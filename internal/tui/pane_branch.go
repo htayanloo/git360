@@ -87,7 +87,13 @@ func (bb *BranchBrowser) View(styles Styles, width int, height int) string {
 			}
 		}
 
-		lineContent := fmt.Sprintf("  %s %s", icon, item)
+		itemName := item
+		maxItemLen := width - 10
+		if maxItemLen > 5 && len(itemName) > maxItemLen {
+			itemName = itemName[:maxItemLen-3] + "..."
+		}
+
+		lineContent := fmt.Sprintf("  %s %s", icon, itemName)
 
 		if isSelected {
 			sb.WriteString(styles.SelectedLineStyle.Width(width).Render(lineContent) + "\n")

@@ -219,3 +219,12 @@ func (c *Client) RevertCommit(hash string) error {
 	_, err := c.runCmd("revert", "--no-edit", hash)
 	return err
 }
+
+// GetRemoteURL returns the remote URL for origin.
+func (c *Client) GetRemoteURL() (string, error) {
+	out, err := c.runCmd("remote", "get-url", "origin")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(out), nil
+}

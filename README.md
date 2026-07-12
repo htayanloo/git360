@@ -68,19 +68,36 @@ Or pass a path to target another repository:
 |---|---|---|
 | `Tab` | Global | Cycle active focus clockwise (Graph $\rightarrow$ Status $\rightarrow$ Diff) |
 | `Shift+Tab` | Global | Cycle active focus counter-clockwise |
-| `↑` / `↓` or `j` / `k` | List Panes | Scroll up/down through commits or modified files list |
+| `↑` / `↓` or `j` / `k` | List Panes | Scroll up/down through commits, files, or GitLab items |
+| `Shift + Arrow keys` | Global | Dynamically resize the vertical/horizontal split layout |
 | `Space` | Status Pane | Toggle staged/unstaged state of the selected file |
 | `s` | Status Pane | Stage selected file |
 | `u` | Status Pane | Unstage selected file |
+| `g` | Global | Toggle GitLab Dashboard (MRs, Pipelines, Issues) |
+| `h` / `l` | GitLab Pane | Switch between GitLab sub-tabs (MRs $\leftrightarrow$ Pipelines $\leftrightarrow$ Issues) |
+| `Enter` | GitLab Pane | Load MR description or Pipeline Jobs list in Diff Viewer |
+| `Enter` (on Pipeline Jobs) | GitLab Pane | Fetch and load trace logs of the first failed job |
 | `f` | Global | Trigger a background remote `git fetch` (non-blocking) |
-| `r` | Global | Force a manual UI and repository state refresh |
+| `r` | Global | Force a manual UI and repository/GitLab state refresh |
 | `q` or `Ctrl+C` | Global | Exit application |
+
+---
+
+## 🦊 GitLab Integration Config
+
+To authenticate with GitLab, set the `GITLAB_TOKEN` environment variable before running the application:
+
+```bash
+export GITLAB_TOKEN="your_personal_access_token"
+```
+
+The application automatically parses the remote origin URL of your repository (supporting standard HTTPS/SSH URLs and self-hosted GitLab instances) to connect to the correct project.
 
 ---
 
 ## 🏗️ Architecture Overview
 
-The codebase is split into two cleanly separated packages: the Git shell driver and the Bubble Tea TUI render loop.
+The codebase is split into modular packages: the Git shell driver, the GitLab API client, and the Bubble Tea TUI render loop.
 
 ```
 golang-git-graph/
@@ -92,12 +109,16 @@ golang-git-graph/
 │   │   ├── types.go        # Git structures (Commit, FileChange, RepoState)
 │   │   ├── client.go       # os/exec wrappers running commands in the repo path
 │   │   └── parser.go       # Parses porcelain status outputs and graph structures
+│   ├── gitlab/
+│   │   ├── client.go       # Lightweight REST API client for GitLab (MRs, CI/CD, Issues)
+│   │   └── client_test.go  # Unit tests for GitLab remote URL parsing
 │   └── tui/
 │       ├── app.go          # Central event-loop coordinator and layout generator
 │       ├── styles.go       # Lipgloss Dracula-themed color palette and borders
 │       ├── pane_graph.go   # Commit History list view
 │       ├── pane_status.go  # Working tree file list view
 │       ├── pane_diff.go    # Highlighted file diff rendering using viewport
+│       ├── pane_gitlab.go  # GitLab MRs, pipelines, and issues view
 │       └── pane_meta.go    # Live activity log and metrics view
 ```
 
@@ -105,6 +126,7 @@ golang-git-graph/
 1. **CLI Commands vs. Native Libraries**: `os/exec` wraps the standard `git` CLI instead of utilizing pure Go libraries (like `go-git`). This guarantees full compatibility with system aliases, submodules, configurations, and renders the visual graph structures natively.
 2. **Comparison-Based Logging**: The TUI maintains a cache map of the previous file states. During every poll cycle (every 2 seconds), it compares the old map with the new map to identify when files are created, modified, staged, or committed, printing an event feed in the **System Logs** panel.
 3. **Null-Delimiter Log Parsing**: Commits are formatted using `%x00` null byte markers during CLI invocation. This isolates the commit hash, author, date, subject, and ref values, preventing parsing errors when branches merge or tree connection lines contain special characters like `|` or `/`.
+4. **Lightweight GitLab Integration**: Uses Go's standard library `net/http` to build a zero-dependency GitLab API wrapper, allowing real-time monitoring of pipelines, merge requests, and issue tracking.
 
 ---
 

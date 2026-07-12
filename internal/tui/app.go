@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"golang-git-graph/internal/git"
+	"golang-git-graph/internal/gitlab"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -31,36 +32,257 @@ type errorMsg struct {
 }
 
 type AppModel struct {
-	GitClient         *git.Client
-	Styles            Styles
-	ActivePane        Pane
-	GraphPane         *GraphPane
-	StatusPane        *StatusPane
-	DiffPane          *DiffPane
-	MetaPane          *MetaPane
-	BranchBrowser     *BranchBrowser
-	ShowBranchBrowser bool
-	Width             int
-	Height            int
-	Err               error
-	LastRefresh       time.Time
-	PrevChangesMap    map[string]git.FileChange // Used to log changes over time
-	IsFetching        bool
+	GitClient             *git.Client
+	GitLabClient          *gitlab.Client
+	Styles                Styles
+	ActivePane            Pane
+	GraphPane             *GraphPane
+	StatusPane            *StatusPane
+	DiffPane              *DiffPane
+	MetaPane              *MetaPane
+	BranchBrowser         *BranchBrowser
+	GitLabPane            *GitLabPane
+	ShowBranchBrowser     bool
+	ShowGitLab            bool
+	Width                 int
+	Height                int
+	Err                   error
+	LastRefresh           time.Time
+	PrevChangesMap        map[string]git.FileChange // Used to log changes over time
+	IsFetching            bool
+	HorizontalSplitOffset int
+	VerticalSplitOffset   int
 }
 
 func NewAppModel(client *git.Client) *AppModel {
-	return &AppModel{
-		GitClient:         client,
-		Styles:            DefaultStyles(),
-		ActivePane:        PaneGraph,
-		GraphPane:         NewGraphPane(),
-		StatusPane:        NewStatusPane(),
-		DiffPane:          NewDiffPane(),
-		MetaPane:          NewMetaPane(),
-		BranchBrowser:     NewBranchBrowser(),
-		ShowBranchBrowser: false,
-		PrevChangesMap:    make(map[string]git.FileChange),
+	m := &AppModel{
+		GitClient:             client,
+		Styles:                DefaultStyles(),
+		ActivePane:            PaneGraph,
+		GraphPane:             NewGraphPane(),
+		StatusPane:            NewStatusPane(),
+		DiffPane:              NewDiffPane(),
+		MetaPane:              NewMetaPane(),
+		BranchBrowser:         NewBranchBrowser(),
+		GitLabPane:            NewGitLabPane(),
+		ShowBranchBrowser:     false,
+		ShowGitLab:            false,
+		PrevChangesMap:        make(map[string]git.FileChange),
+		HorizontalSplitOffset: 0,
+		VerticalSplitOffset:   0,
 	}
+
+	// Try to initialize GitLab client from remote URL
+	remoteURL, err := client.GetRemoteURL()
+	if err == nil {
+		glClient, glErr := gitlab.NewClient(remoteURL)
+		if glErr == nil {
+			m.GitLabClient = glClient
+		}
+	}
+
+	return m
+}
+
+func (m *AppModel) layoutDimensions() (int, int, int, int) {
+	availableHeight := m.Height - 2
+	if availableHeight < 4 {
+		return 0, 0, 0, 0
+	}
+
+	topHeight := (availableHeight / 2) + m.VerticalSplitOffset
+	if topHeight < 5 {
+		topHeight = 5
+	}
+	if topHeight > availableHeight-5 {
+		topHeight = availableHeight - 5
+	}
+	bottomHeight := availableHeight - topHeight
+
+	leftWidth := ((m.Width * 6) / 10) + m.HorizontalSplitOffset
+	if leftWidth < 15 {
+		leftWidth = 15
+	}
+	if leftWidth > m.Width-15 {
+		leftWidth = m.Width - 15
+	}
+	rightWidth := m.Width - leftWidth
+
+	return leftWidth, rightWidth, topHeight, bottomHeight
+}
+
+type gitlabLoadedMsg struct {
+	mrs       []gitlab.MergeRequest
+	pipelines []gitlab.Pipeline
+	issues    []gitlab.Issue
+	err       error
+}
+
+func (m *AppModel) loadGitLabDataCmd() tea.Cmd {
+	return func() tea.Msg {
+		if m.GitLabClient == nil {
+			return gitlabLoadedMsg{err: fmt.Errorf("GitLab client not initialized (check remote origin URL)")}
+		}
+		if m.GitLabClient.Token == "" {
+			return gitlabLoadedMsg{err: fmt.Errorf("token_missing")}
+		}
+
+		mrs, err := m.GitLabClient.GetMergeRequests()
+		if err != nil {
+			return gitlabLoadedMsg{err: err}
+		}
+
+		pipelines, err := m.GitLabClient.GetPipelines()
+		if err != nil {
+			return gitlabLoadedMsg{err: err}
+		}
+
+		issues, err := m.GitLabClient.GetIssues()
+		if err != nil {
+			return gitlabLoadedMsg{err: err}
+		}
+
+		return gitlabLoadedMsg{
+			mrs:       mrs,
+			pipelines: pipelines,
+			issues:    issues,
+		}
+	}
+}
+
+type gitlabJobsLoadedMsg struct {
+	pipelineID int
+	jobs       []gitlab.Job
+	err        error
+}
+
+func (m *AppModel) loadGitLabJobsCmd(pipelineID int) tea.Cmd {
+	return func() tea.Msg {
+		jobs, err := m.GitLabClient.GetPipelineJobs(pipelineID)
+		return gitlabJobsLoadedMsg{
+			pipelineID: pipelineID,
+			jobs:       jobs,
+			err:        err,
+		}
+	}
+}
+
+type gitlabJobLogsLoadedMsg struct {
+	jobID int
+	logs  string
+	err   error
+}
+
+func (m *AppModel) loadGitLabJobLogsCmd(jobID int) tea.Cmd {
+	return func() tea.Msg {
+		logs, err := m.GitLabClient.GetJobLogs(jobID)
+		return gitlabJobLogsLoadedMsg{
+			jobID: jobID,
+			logs:  logs,
+			err:   err,
+		}
+	}
+}
+
+func (m *AppModel) loadGitLabDiffCmd() tea.Cmd {
+	return func() tea.Msg {
+		pane := m.GitLabPane
+		if pane.TotalItems() == 0 || pane.Cursor >= pane.TotalItems() {
+			return nil
+		}
+
+		switch pane.ActiveTab {
+		case GitLabTabMR:
+			mr := pane.MRs[pane.Cursor]
+			title := fmt.Sprintf("Merge Request !%d: %s", mr.IID, mr.Title)
+			var sb strings.Builder
+			sb.WriteString(fmt.Sprintf("Title:      %s\n", mr.Title))
+			sb.WriteString(fmt.Sprintf("State:      %s\n", mr.State))
+			sb.WriteString(fmt.Sprintf("Author:     %s\n", mr.Author.Name))
+			sb.WriteString(fmt.Sprintf("Created At: %s\n", mr.CreatedAt))
+			sb.WriteString(fmt.Sprintf("Source:     %s\n", mr.SourceBranch))
+			sb.WriteString(fmt.Sprintf("Target:     %s\n", mr.TargetBranch))
+			sb.WriteString(fmt.Sprintf("URL:        %s\n\n", mr.WebURL))
+			sb.WriteString("Description:\n")
+			sb.WriteString("----------------------------------------\n")
+			sb.WriteString(mr.Description)
+			return diffLoadedMsg{Title: title, Content: sb.String()}
+
+		case GitLabTabPipelines:
+			p := pane.Pipelines[pane.Cursor]
+			title := fmt.Sprintf("Pipeline #%d Status", p.ID)
+			var sb strings.Builder
+			sb.WriteString(fmt.Sprintf("Pipeline ID: %d\n", p.ID))
+			sb.WriteString(fmt.Sprintf("Status:      %s\n", p.Status))
+			sb.WriteString(fmt.Sprintf("Ref/Branch:  %s\n", p.Ref))
+			sb.WriteString(fmt.Sprintf("URL:         %s\n\n", p.WebURL))
+			
+			// Show jobs if loaded
+			if jobs, ok := pane.JobsMap[p.ID]; ok {
+				sb.WriteString("Jobs in this pipeline:\n")
+				sb.WriteString("----------------------------------------\n")
+				for _, job := range jobs {
+					sb.WriteString(fmt.Sprintf("  - [%s] %s (Stage: %s) -> ID: %d (Press Enter to view logs)\n", job.Status, job.Name, job.Stage, job.ID))
+				}
+			} else {
+				sb.WriteString("Press Enter to fetch jobs and log outputs.\n")
+			}
+			return diffLoadedMsg{Title: title, Content: sb.String()}
+
+		case GitLabTabIssues:
+			issue := pane.Issues[pane.Cursor]
+			title := fmt.Sprintf("Issue #%d: %s", issue.IID, issue.Title)
+			var sb strings.Builder
+			sb.WriteString(fmt.Sprintf("Title:      %s\n", issue.Title))
+			sb.WriteString(fmt.Sprintf("State:      %s\n", issue.State))
+			assigneeName := "unassigned"
+			if issue.Assignee != nil {
+				assigneeName = issue.Assignee.Name
+			}
+			sb.WriteString(fmt.Sprintf("Assignee:   %s\n", assigneeName))
+			sb.WriteString(fmt.Sprintf("Created At: %s\n", issue.CreatedAt))
+			sb.WriteString(fmt.Sprintf("URL:        %s\n\n", issue.WebURL))
+			sb.WriteString("Description:\n")
+			sb.WriteString("----------------------------------------\n")
+			sb.WriteString(issue.Description)
+			return diffLoadedMsg{Title: title, Content: sb.String()}
+		}
+		return nil
+	}
+}
+
+func (m *AppModel) handleGitLabEnter() tea.Cmd {
+	pane := m.GitLabPane
+	if pane.TotalItems() == 0 || pane.Cursor >= pane.TotalItems() {
+		return nil
+	}
+
+	if pane.ActiveTab == GitLabTabPipelines {
+		p := pane.Pipelines[pane.Cursor]
+		if jobs, ok := pane.JobsMap[p.ID]; ok {
+			var targetJobID int
+			var targetJobName string
+			for _, job := range jobs {
+				if job.Status == "failed" {
+					targetJobID = job.ID
+					targetJobName = job.Name
+					break
+				}
+			}
+			if targetJobID == 0 && len(jobs) > 0 {
+				targetJobID = jobs[0].ID
+				targetJobName = jobs[0].Name
+			}
+			if targetJobID != 0 {
+				m.MetaPane.AddLog(fmt.Sprintf("Fetching logs for job %s (%d)...", targetJobName, targetJobID))
+				return m.loadGitLabJobLogsCmd(targetJobID)
+			}
+		} else {
+			m.MetaPane.AddLog(fmt.Sprintf("Loading jobs for pipeline #%d...", p.ID))
+			return m.loadGitLabJobsCmd(p.ID)
+		}
+	}
+	return nil
 }
 
 // Start the auto-polling tick command
@@ -216,6 +438,7 @@ func (m *AppModel) Init() tea.Cmd {
 	return tea.Batch(
 		m.tickChan(),
 		m.checkGitStateCmd(),
+		m.loadGitLabDataCmd(),
 	)
 }
 
@@ -247,6 +470,10 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.MetaPane.StatusText = "Refreshing..."
 			m.MetaPane.AddLog("Manual refresh triggered")
 			cmds = append(cmds, m.checkGitStateCmd())
+			if m.ShowGitLab {
+				m.GitLabPane.IsLoading = true
+				cmds = append(cmds, m.loadGitLabDataCmd())
+			}
 
 		case "f":
 			// Manual fetch
@@ -257,6 +484,31 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cmds = append(cmds, m.fetchOriginCmd())
 			}
 
+		case "g":
+			if m.ShowGitLab {
+				m.ShowGitLab = false
+				cmds = append(cmds, m.loadDiffCmd())
+			} else {
+				m.ShowGitLab = true
+				m.ShowBranchBrowser = false
+				m.ActivePane = PaneStatus
+				m.GitLabPane.IsLoading = true
+				m.MetaPane.AddLog("Loading GitLab dashboard...")
+				cmds = append(cmds, m.loadGitLabDataCmd())
+			}
+
+		case "h":
+			if m.ShowGitLab && m.ActivePane == PaneStatus {
+				m.GitLabPane.PrevTab()
+				cmds = append(cmds, m.loadGitLabDiffCmd())
+			}
+
+		case "l":
+			if m.ShowGitLab && m.ActivePane == PaneStatus {
+				m.GitLabPane.NextTab()
+				cmds = append(cmds, m.loadGitLabDiffCmd())
+			}
+
 		case "b":
 			// Toggle branch browser
 			if m.ShowBranchBrowser && !m.BranchBrowser.IsTags {
@@ -264,6 +516,7 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cmds = append(cmds, m.loadDiffCmd())
 			} else {
 				m.ShowBranchBrowser = true
+				m.ShowGitLab = false
 				m.ActivePane = PaneStatus
 				m.MetaPane.AddLog("Browsing branches...")
 				cmds = append(cmds, m.loadBranchesCmd())
@@ -276,19 +529,25 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cmds = append(cmds, m.loadDiffCmd())
 			} else {
 				m.ShowBranchBrowser = true
+				m.ShowGitLab = false
 				m.ActivePane = PaneStatus
 				m.MetaPane.AddLog("Browsing tags...")
 				cmds = append(cmds, m.loadTagsCmd())
 			}
 
 		case "escape":
-			if m.ShowBranchBrowser {
+			if m.ShowGitLab {
+				m.ShowGitLab = false
+				cmds = append(cmds, m.loadDiffCmd())
+			} else if m.ShowBranchBrowser {
 				m.ShowBranchBrowser = false
 				cmds = append(cmds, m.loadDiffCmd())
 			}
 
 		case "enter":
-			if m.ShowBranchBrowser && m.ActivePane == PaneStatus {
+			if m.ShowGitLab && m.ActivePane == PaneStatus {
+				cmds = append(cmds, m.handleGitLabEnter())
+			} else if m.ShowBranchBrowser && m.ActivePane == PaneStatus {
 				selected := m.BranchBrowser.SelectedItem()
 				if selected != "" {
 					m.MetaPane.StatusText = "Checking out..."
@@ -324,7 +583,10 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.GraphPane.ScrollUp()
 				cmds = append(cmds, m.loadDiffCmd())
 			} else if m.ActivePane == PaneStatus {
-				if m.ShowBranchBrowser {
+				if m.ShowGitLab {
+					m.GitLabPane.ScrollUp()
+					cmds = append(cmds, m.loadGitLabDiffCmd())
+				} else if m.ShowBranchBrowser {
 					m.BranchBrowser.ScrollUp()
 					selected := m.BranchBrowser.SelectedItem()
 					if selected != "" {
@@ -341,7 +603,10 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.GraphPane.ScrollDown()
 				cmds = append(cmds, m.loadDiffCmd())
 			} else if m.ActivePane == PaneStatus {
-				if m.ShowBranchBrowser {
+				if m.ShowGitLab {
+					m.GitLabPane.ScrollDown()
+					cmds = append(cmds, m.loadGitLabDiffCmd())
+				} else if m.ShowBranchBrowser {
 					m.BranchBrowser.ScrollDown()
 					selected := m.BranchBrowser.SelectedItem()
 					if selected != "" {
@@ -352,6 +617,22 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					cmds = append(cmds, m.loadDiffCmd())
 				}
 			}
+
+		case "ctrl+left", "alt+left", "shift+left":
+			m.HorizontalSplitOffset--
+			cmds = append(cmds, m.loadDiffCmd())
+
+		case "ctrl+right", "alt+right", "shift+right":
+			m.HorizontalSplitOffset++
+			cmds = append(cmds, m.loadDiffCmd())
+
+		case "ctrl+up", "alt+up", "shift+up":
+			m.VerticalSplitOffset--
+			cmds = append(cmds, m.loadDiffCmd())
+
+		case "ctrl+down", "alt+down", "shift+down":
+			m.VerticalSplitOffset++
+			cmds = append(cmds, m.loadDiffCmd())
 
 		case "s":
 			// Stage current file if in status pane
@@ -472,6 +753,42 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.MetaPane.AddLog(fmt.Sprintf("Reverted commit %s", msg.hash))
 		cmds = append(cmds, m.checkGitStateCmd())
 
+	case gitlabLoadedMsg:
+		m.GitLabPane.IsLoading = false
+		if msg.err != nil {
+			if msg.err.Error() == "token_missing" {
+				m.GitLabPane.TokenMissing = true
+			} else {
+				m.GitLabPane.Error = msg.err
+				m.MetaPane.AddLog(fmt.Sprintf("GitLab error: %v", msg.err))
+			}
+		} else {
+			m.GitLabPane.MRs = msg.mrs
+			m.GitLabPane.Pipelines = msg.pipelines
+			m.GitLabPane.Issues = msg.issues
+			m.GitLabPane.Error = nil
+			m.GitLabPane.TokenMissing = false
+			if m.ShowGitLab {
+				cmds = append(cmds, m.loadGitLabDiffCmd())
+			}
+		}
+
+	case gitlabJobsLoadedMsg:
+		if msg.err != nil {
+			m.MetaPane.AddLog(fmt.Sprintf("GitLab jobs error: %v", msg.err))
+		} else {
+			m.GitLabPane.JobsMap[msg.pipelineID] = msg.jobs
+			m.MetaPane.AddLog(fmt.Sprintf("Loaded %d jobs for pipeline #%d", len(msg.jobs), msg.pipelineID))
+			cmds = append(cmds, m.loadGitLabDiffCmd())
+		}
+
+	case gitlabJobLogsLoadedMsg:
+		if msg.err != nil {
+			m.MetaPane.AddLog(fmt.Sprintf("GitLab logs error: %v", msg.err))
+		} else {
+			m.DiffPane.SetContent(fmt.Sprintf("CI/CD Job %d Logs", msg.jobID), msg.logs, m.Styles)
+		}
+
 	case errorMsg:
 		m.Err = msg.err
 		m.MetaPane.AddLog(fmt.Sprintf("Error: %v", msg.err))
@@ -479,12 +796,83 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.Width = msg.Width
 		m.Height = msg.Height
+
+	case tea.MouseMsg:
+		leftWidth, _, topHeight, _ := m.layoutDimensions()
+		if leftWidth > 0 && topHeight > 0 {
+			isTopRow := msg.Y >= 1 && msg.Y <= topHeight
+			isBottomRow := msg.Y >= topHeight+1 && msg.Y <= m.Height-2
+			isLeftCol := msg.X >= 0 && msg.X < leftWidth
+			isRightCol := msg.X >= leftWidth && msg.X < m.Width
+
+			// Handle clicks to change active pane
+			if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
+				if isTopRow && isLeftCol {
+					m.ActivePane = PaneGraph
+					cmds = append(cmds, m.loadDiffCmd())
+				} else if isTopRow && isRightCol {
+					m.ActivePane = PaneStatus
+					cmds = append(cmds, m.loadDiffCmd())
+				} else if isBottomRow && isLeftCol {
+					m.ActivePane = PaneDiff
+				}
+			}
+
+			// Handle mouse wheel scrolling
+			if msg.Button == tea.MouseButtonWheelUp {
+				if isTopRow && isLeftCol {
+					m.GraphPane.ScrollUp()
+					cmds = append(cmds, m.loadDiffCmd())
+				} else if isTopRow && isRightCol {
+					if m.ShowGitLab {
+						m.GitLabPane.ScrollUp()
+						cmds = append(cmds, m.loadGitLabDiffCmd())
+					} else if m.ShowBranchBrowser {
+						m.BranchBrowser.ScrollUp()
+						selected := m.BranchBrowser.SelectedItem()
+						if selected != "" {
+							cmds = append(cmds, m.compareRefCmd(selected))
+						}
+					} else {
+						m.StatusPane.ScrollUp()
+						cmds = append(cmds, m.loadDiffCmd())
+					}
+				} else if isBottomRow && isLeftCol {
+					m.DiffPane.Viewport.LineUp(3)
+				}
+			} else if msg.Button == tea.MouseButtonWheelDown {
+				if isTopRow && isLeftCol {
+					m.GraphPane.ScrollDown()
+					cmds = append(cmds, m.loadDiffCmd())
+				} else if isTopRow && isRightCol {
+					if m.ShowGitLab {
+						m.GitLabPane.ScrollDown()
+						cmds = append(cmds, m.loadGitLabDiffCmd())
+					} else if m.ShowBranchBrowser {
+						m.BranchBrowser.ScrollDown()
+						selected := m.BranchBrowser.SelectedItem()
+						if selected != "" {
+							cmds = append(cmds, m.compareRefCmd(selected))
+						}
+					} else {
+						m.StatusPane.ScrollDown()
+						cmds = append(cmds, m.loadDiffCmd())
+					}
+				} else if isBottomRow && isLeftCol {
+					m.DiffPane.Viewport.LineDown(3)
+				}
+			}
+		}
 	}
 
 	// Delegate diff pane update if active (for scrolling diff viewport)
 	if m.ActivePane == PaneDiff {
-		diffCmd := m.DiffPane.Update(msg)
-		cmds = append(cmds, diffCmd)
+		// Do not pass mouse messages to avoid duplicate wheel scroll handling,
+		// or viewport scrolling when mouse is over other panes.
+		if _, isMouse := msg.(tea.MouseMsg); !isMouse {
+			diffCmd := m.DiffPane.Update(msg)
+			cmds = append(cmds, diffCmd)
+		}
 	}
 
 	return m, tea.Batch(cmds...)
@@ -559,17 +947,10 @@ func (m *AppModel) View() string {
 		return "Initializing layout..."
 	}
 
-	// Calculate layout splits (headers & footers take 1 line each)
-	availableHeight := m.Height - 2
-	if availableHeight < 4 {
+	leftWidth, rightWidth, topHeight, bottomHeight := m.layoutDimensions()
+	if leftWidth == 0 || topHeight == 0 {
 		return "Terminal window is too small!"
 	}
-
-	topHeight := availableHeight / 2
-	bottomHeight := availableHeight - topHeight
-
-	leftWidth := (m.Width * 6) / 10
-	rightWidth := m.Width - leftWidth
 
 	// Style title headers for each pane
 	paneTitle := func(title string, pane Pane) string {
@@ -580,28 +961,36 @@ func (m *AppModel) View() string {
 	}
 
 	// 1. Render Top Row
-	graphContent := m.GraphPane.View(m.Styles, leftWidth-4, topHeight-2, m.ActivePane == PaneGraph)
+	topInnerHeight := topHeight - 4
+	if topInnerHeight < 1 {
+		topInnerHeight = 1
+	}
+
+	graphContent := m.GraphPane.View(m.Styles, leftWidth-4, topInnerHeight, m.ActivePane == PaneGraph)
 	graphBox := m.Styles.InactivePaneBorder.Copy()
 	if m.ActivePane == PaneGraph {
 		graphBox = m.Styles.ActivePaneBorder.Copy()
 	}
 	graphView := graphBox.
-		Width(leftWidth - 2).
-		Height(topHeight - 2).
+		Width(leftWidth).
+		Height(topHeight).
 		Render(paneTitle("GIT HISTORY GRAPH", PaneGraph) + "\n" + graphContent)
 
 	// Determine status pane contents and title dynamically
 	var statusContent string
 	var statusTitle string
-	if m.ShowBranchBrowser {
-		statusContent = m.BranchBrowser.View(m.Styles, rightWidth-4, topHeight-2)
+	if m.ShowGitLab {
+		statusContent = m.GitLabPane.View(m.Styles, rightWidth-4, topInnerHeight)
+		statusTitle = "GITLAB DASHBOARD (h/l=Tabs, Enter=View, Esc=Close)"
+	} else if m.ShowBranchBrowser {
+		statusContent = m.BranchBrowser.View(m.Styles, rightWidth-4, topInnerHeight)
 		if m.BranchBrowser.IsTags {
 			statusTitle = "TAG BROWSER (Enter=Checkout, c/Scroll=Compare, Esc=Close)"
 		} else {
 			statusTitle = "BRANCH BROWSER (Enter=Checkout, c/Scroll=Compare, Esc=Close)"
 		}
 	} else {
-		statusContent = m.StatusPane.View(m.Styles, rightWidth-4, topHeight-2, m.ActivePane == PaneStatus)
+		statusContent = m.StatusPane.View(m.Styles, rightWidth-4, topInnerHeight, m.ActivePane == PaneStatus)
 		statusTitle = "STAGE CONTROL (Space=Toggle, s=Stage, u=Unstage)"
 	}
 
@@ -610,30 +999,35 @@ func (m *AppModel) View() string {
 		statusBox = m.Styles.ActivePaneBorder.Copy()
 	}
 	statusView := statusBox.
-		Width(rightWidth - 2).
-		Height(topHeight - 2).
+		Width(rightWidth).
+		Height(topHeight).
 		Render(paneTitle(statusTitle, PaneStatus) + "\n" + statusContent)
 
 	topRow := lipgloss.JoinHorizontal(lipgloss.Top, graphView, statusView)
 
 	// 2. Render Bottom Row
+	bottomInnerHeight := bottomHeight - 4
+	if bottomInnerHeight < 1 {
+		bottomInnerHeight = 1
+	}
+
 	// Resize diff viewport to fit its container
-	m.DiffPane.Resize(leftWidth-4, bottomHeight-2)
+	m.DiffPane.Resize(leftWidth-4, bottomInnerHeight)
 	diffContent := m.DiffPane.View()
 	diffBox := m.Styles.InactivePaneBorder.Copy()
 	if m.ActivePane == PaneDiff {
 		diffBox = m.Styles.ActivePaneBorder.Copy()
 	}
 	diffView := diffBox.
-		Width(leftWidth - 2).
-		Height(bottomHeight - 2).
+		Width(leftWidth).
+		Height(bottomHeight).
 		Render(paneTitle(m.DiffPane.Title, PaneDiff) + "\n" + diffContent)
 
-	metaContent := m.MetaPane.View(m.Styles, rightWidth-4, bottomHeight-2)
+	metaContent := m.MetaPane.View(m.Styles, rightWidth-4, bottomInnerHeight)
 	metaBox := m.Styles.InactivePaneBorder.Copy() // Meta pane is informational, never directly focused
 	metaView := metaBox.
-		Width(rightWidth - 2).
-		Height(bottomHeight - 2).
+		Width(rightWidth).
+		Height(bottomHeight).
 		Render(m.Styles.PaneTitleInactive.Render("░ AGENT METRICS & SYSTEM LOGS") + "\n" + metaContent)
 
 	bottomRow := lipgloss.JoinHorizontal(lipgloss.Top, diffView, metaView)
@@ -649,16 +1043,22 @@ func (m *AppModel) View() string {
 	var helpParts []string
 	helpParts = append(helpParts, fmt.Sprintf("%s Switch Pane", m.Styles.HelpKeyStyle.Render("Tab")))
 	helpParts = append(helpParts, fmt.Sprintf("%s/%s Scroll", m.Styles.HelpKeyStyle.Render("↑↓"), m.Styles.HelpKeyStyle.Render("j/k")))
+	helpParts = append(helpParts, fmt.Sprintf("%s Resize", m.Styles.HelpKeyStyle.Render("Shift+Arrows")))
 	
 	if m.ShowBranchBrowser {
 		helpParts = append(helpParts, fmt.Sprintf("%s Checkout", m.Styles.HelpKeyStyle.Render("Enter")))
 		helpParts = append(helpParts, fmt.Sprintf("%s Compare", m.Styles.HelpKeyStyle.Render("c")))
+		helpParts = append(helpParts, fmt.Sprintf("%s Close", m.Styles.HelpKeyStyle.Render("Esc")))
+	} else if m.ShowGitLab {
+		helpParts = append(helpParts, fmt.Sprintf("%s/%s Tab", m.Styles.HelpKeyStyle.Render("h"), m.Styles.HelpKeyStyle.Render("l")))
+		helpParts = append(helpParts, fmt.Sprintf("%s View Logs/Details", m.Styles.HelpKeyStyle.Render("Enter")))
 		helpParts = append(helpParts, fmt.Sprintf("%s Close", m.Styles.HelpKeyStyle.Render("Esc")))
 	} else {
 		helpParts = append(helpParts, fmt.Sprintf("%s Toggle Stage", m.Styles.HelpKeyStyle.Render("Space")))
 		helpParts = append(helpParts, fmt.Sprintf("%s Stage", m.Styles.HelpKeyStyle.Render("s")))
 		helpParts = append(helpParts, fmt.Sprintf("%s Unstage", m.Styles.HelpKeyStyle.Render("u")))
 	}
+	helpParts = append(helpParts, fmt.Sprintf("%s GitLab", m.Styles.HelpKeyStyle.Render("g")))
 	
 	helpParts = append(helpParts, fmt.Sprintf("%s Branches", m.Styles.HelpKeyStyle.Render("b")))
 	helpParts = append(helpParts, fmt.Sprintf("%s Tags", m.Styles.HelpKeyStyle.Render("t")))

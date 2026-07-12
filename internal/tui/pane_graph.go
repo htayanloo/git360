@@ -87,17 +87,24 @@ func (gp *GraphPane) View(styles Styles, width int, height int, focused bool) st
 			hashStr := lipgloss.NewStyle().Foreground(lipgloss.Color(ColorYellow)).Render(c.Hash)
 			refsStr := colorizeRefs(c.Refs, styles)
 			
-			// Format author with single unicode icon
+			// Format author with single unicode icon (truncating on narrow screens)
 			authorStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(ColorCyan))
-			authorStr := " 👤 " + authorStyle.Render(c.Author)
+			authorText := c.Author
+			if width < 80 && len(authorText) > 10 {
+				authorText = authorText[:7] + "..."
+			}
+			authorStr := " 👤 " + authorStyle.Render(authorText)
 			
-			// Format date with clock icon and both formats
+			// Format date with clock icon and both formats (hiding/truncating on narrow screens)
 			dateStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(ColorComment))
 			dateText := c.Date
-			if c.AbsDate != "" {
+			if width >= 100 && c.AbsDate != "" {
 				dateText = fmt.Sprintf("%s (%s)", c.Date, c.AbsDate)
 			}
-			dateStr := " ⏱️ " + dateStyle.Render(dateText)
+			dateStr := ""
+			if width > 60 {
+				dateStr = " ⏱️ " + dateStyle.Render(dateText)
+			}
 			
 			// Safely truncate subject to fit the remaining width
 			graphWidth := lipgloss.Width(coloredGraph)
@@ -106,15 +113,19 @@ func (gp *GraphPane) View(styles Styles, width int, height int, focused bool) st
 			authorWidth := lipgloss.Width(authorStr)
 			dateWidth := lipgloss.Width(dateStr)
 			
-			maxSubjectWidth := width - graphWidth - hashWidth - refsWidth - authorWidth - dateWidth - 2
+			maxSubjectWidth := width - graphWidth - hashWidth - refsWidth - authorWidth - dateWidth - 4
 			
 			subjectStr := c.Subject
-			if maxSubjectWidth > 5 && len(subjectStr) > maxSubjectWidth {
-				subjectStr = subjectStr[:maxSubjectWidth-3] + "..."
-			} else if maxSubjectWidth <= 5 {
-				if len(subjectStr) > 10 {
-					subjectStr = subjectStr[:7] + "..."
+			if maxSubjectWidth > 5 {
+				if len(subjectStr) > maxSubjectWidth {
+					subjectStr = subjectStr[:maxSubjectWidth-3] + "..."
 				}
+			} else if maxSubjectWidth > 0 {
+				if len(subjectStr) > maxSubjectWidth {
+					subjectStr = subjectStr[:maxSubjectWidth]
+				}
+			} else {
+				subjectStr = ""
 			}
 			
 			commitText = fmt.Sprintf("%s%s %s%s%s", hashStr, refsStr, subjectStr, authorStr, dateStr)
