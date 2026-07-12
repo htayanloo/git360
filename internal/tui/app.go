@@ -1186,7 +1186,8 @@ func (m *AppModel) View() string {
 	if m.LatestVersion != "" && m.LatestVersion != Version {
 		updateNotify = fmt.Sprintf("  |  %s", m.Styles.HelpKeyStyle.Render("✨ Update available: "+m.LatestVersion))
 	}
-	headerText := fmt.Sprintf(" GIT-360  |  Active Branch: %s  |  Last update: %s%s", 
+	headerText := fmt.Sprintf(" GIT-360 %s  |  Active Branch: %s  |  Last update: %s%s", 
+		Version,
 		m.MetaPane.Branch, 
 		m.LastRefresh.Format("15:04:05"),
 		updateNotify,
