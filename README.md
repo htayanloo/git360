@@ -77,6 +77,7 @@ Or pass a path to target another repository:
 | `h` / `l` | GitLab Pane | Switch between GitLab sub-tabs (MRs $\leftrightarrow$ Pipelines $\leftrightarrow$ Issues) |
 | `Enter` | GitLab Pane | Load MR description or Pipeline Jobs list in Diff Viewer |
 | `Enter` (on Pipeline Jobs) | GitLab Pane | Fetch and load trace logs of the first failed job |
+| `Shift + U` | Global | Perform in-app automatic update to the latest release version |
 | `f` | Global | Trigger a background remote `git fetch` (non-blocking) |
 | `r` | Global | Force a manual UI and repository/GitLab state refresh |
 | `q` or `Ctrl+C` | Global | Exit application |

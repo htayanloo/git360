@@ -3,7 +3,11 @@ package tui
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -57,6 +61,7 @@ type AppModel struct {
 	HorizontalSplitOffset int
 	VerticalSplitOffset   int
 	LatestVersion         string
+	IsUpdating            bool
 }
 
 func NewAppModel(client *git.Client) *AppModel {
@@ -76,6 +81,7 @@ func NewAppModel(client *git.Client) *AppModel {
 		HorizontalSplitOffset: 0,
 		VerticalSplitOffset:   0,
 		LatestVersion:         "",
+		IsUpdating:            false,
 	}
 
 	// Try to initialize GitLab client from remote URL
@@ -483,6 +489,87 @@ func (m *AppModel) checkUpdateCmd() tea.Cmd {
 	}
 }
 
+type selfUpdateFinishedMsg struct {
+	err error
+}
+
+func getTargetAssetName() string {
+	goos := runtime.GOOS
+	goarch := runtime.GOARCH
+
+	if goos == "linux" && goarch == "amd64" {
+		return "git360-linux-amd64"
+	} else if goos == "darwin" && goarch == "amd64" {
+		return "git360-darwin-amd64"
+	} else if goos == "darwin" && goarch == "arm64" {
+		return "git360-darwin-arm64"
+	} else if goos == "windows" && goarch == "amd64" {
+		return "git360-windows-amd64.exe"
+	}
+	return ""
+}
+
+func (m *AppModel) runSelfUpdateCmd() tea.Cmd {
+	return func() tea.Msg {
+		assetName := getTargetAssetName()
+		if assetName == "" {
+			return selfUpdateFinishedMsg{err: fmt.Errorf("unsupported OS/architecture for auto-updates")}
+		}
+
+		downloadURL := fmt.Sprintf("https://github.com/htayanloo/git360/releases/download/%s/%s", m.LatestVersion, assetName)
+
+		client := &http.Client{Timeout: 60 * time.Second}
+		req, err := http.NewRequest("GET", downloadURL, nil)
+		if err != nil {
+			return selfUpdateFinishedMsg{err: err}
+		}
+		
+		req.Header.Set("User-Agent", "git360-updater")
+		resp, err := client.Do(req)
+		if err != nil {
+			return selfUpdateFinishedMsg{err: err}
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			return selfUpdateFinishedMsg{err: fmt.Errorf("failed to download asset: HTTP %d", resp.StatusCode)}
+		}
+
+		exePath, err := os.Executable()
+		if err != nil {
+			return selfUpdateFinishedMsg{err: err}
+		}
+
+		// Write to a temp file in the same directory (ensures same filesystem partition for atomic rename)
+		tmpFile, err := os.CreateTemp(filepath.Dir(exePath), "git360-update-")
+		if err != nil {
+			return selfUpdateFinishedMsg{err: err}
+		}
+		defer os.Remove(tmpFile.Name())
+
+		_, err = io.Copy(tmpFile, resp.Body)
+		if err != nil {
+			tmpFile.Close()
+			return selfUpdateFinishedMsg{err: err}
+		}
+		tmpFile.Close()
+
+		// Set executable permissions
+		err = os.Chmod(tmpFile.Name(), 0755)
+		if err != nil {
+			return selfUpdateFinishedMsg{err: err}
+		}
+
+		// Overwrite the current binary
+		err = os.Rename(tmpFile.Name(), exePath)
+		if err != nil {
+			return selfUpdateFinishedMsg{err: err}
+		}
+
+		return selfUpdateFinishedMsg{err: nil}
+	}
+}
+
 func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
@@ -548,6 +635,14 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.ShowGitLab && m.ActivePane == PaneStatus {
 				m.GitLabPane.NextTab()
 				cmds = append(cmds, m.loadGitLabDiffCmd())
+			}
+
+		case "U":
+			if m.LatestVersion != "" && m.LatestVersion != Version && !m.IsUpdating {
+				m.IsUpdating = true
+				m.MetaPane.StatusText = "Updating app..."
+				m.MetaPane.AddLog(fmt.Sprintf("Downloading and installing %s...", m.LatestVersion))
+				cmds = append(cmds, m.runSelfUpdateCmd())
 			}
 
 		case "b":
@@ -833,6 +928,16 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case updateCheckFinishedMsg:
 		m.LatestVersion = msg.version
 
+	case selfUpdateFinishedMsg:
+		m.IsUpdating = false
+		if msg.err != nil {
+			m.MetaPane.AddLog(fmt.Sprintf("Update failed: %v", msg.err))
+			m.MetaPane.StatusText = "Update failed"
+		} else {
+			m.MetaPane.AddLog("Update installed successfully! Please restart git360.")
+			m.MetaPane.StatusText = "Restart required"
+		}
+
 	case errorMsg:
 		m.Err = msg.err
 		m.MetaPane.AddLog(fmt.Sprintf("Error: %v", msg.err))
@@ -1108,6 +1213,10 @@ func (m *AppModel) View() string {
 		helpParts = append(helpParts, fmt.Sprintf("%s Unstage", m.Styles.HelpKeyStyle.Render("u")))
 	}
 	helpParts = append(helpParts, fmt.Sprintf("%s GitLab", m.Styles.HelpKeyStyle.Render("g")))
+	
+	if m.LatestVersion != "" && m.LatestVersion != Version {
+		helpParts = append(helpParts, fmt.Sprintf("%s Update App", m.Styles.HelpKeyStyle.Render("Shift+U")))
+	}
 	
 	helpParts = append(helpParts, fmt.Sprintf("%s Branches", m.Styles.HelpKeyStyle.Render("b")))
 	helpParts = append(helpParts, fmt.Sprintf("%s Tags", m.Styles.HelpKeyStyle.Render("t")))
