@@ -1,0 +1,77 @@
+{
+  "cmd/git360/main.go": {
+    "mtime": 1783595578.7000527,
+    "ast_hash": "5aad1f80d1dff952d752c9210a6cc052",
+    "semantic_hash": ""
+  },
+  "go.mod": {
+    "mtime": 1783596111.8099685,
+    "ast_hash": "688452c1598c21042b58257df485b9f7",
+    "semantic_hash": ""
+  },
+  "internal/git/client.go": {
+    "mtime": 1783595964.6020005,
+    "ast_hash": "d0a3cb0f847f87754e8b185dd1c00526",
+    "semantic_hash": ""
+  },
+  "internal/git/parser.go": {
+    "mtime": 1783595969.1139996,
+    "ast_hash": "23bdb706a19018217b3c11a4683dcfef",
+    "semantic_hash": ""
+  },
+  "internal/git/types.go": {
+    "mtime": 1783595960.0050015,
+    "ast_hash": "fc11c1ce3060c24182bcfff7b937724f",
+    "semantic_hash": ""
+  },
+  "internal/tui/app.go": {
+    "mtime": 1783593521.670881,
+    "ast_hash": "fd419fd9728bb04ff9cdf4896ffae7b3",
+    "semantic_hash": ""
+  },
+  "internal/tui/pane_diff.go": {
+    "mtime": 1783596093.9109726,
+    "ast_hash": "6cdf95097ea660291c118c797e373e80",
+    "semantic_hash": ""
+  },
+  "internal/tui/pane_graph.go": {
+    "mtime": 1783596079.473976,
+    "ast_hash": "8dd240f70ad67ed883173f108db28d63",
+    "semantic_hash": ""
+  },
+  "internal/tui/pane_meta.go": {
+    "mtime": 1783593470.2206423,
+    "ast_hash": "b3a2204877d0ec24a2bcd66a2e352961",
+    "semantic_hash": ""
+  },
+  "internal/tui/pane_status.go": {
+    "mtime": 1783593461.632661,
+    "ast_hash": "492a465a0c834fa81ebe37cd8698cedb",
+    "semantic_hash": ""
+  },
+  "internal/tui/styles.go": {
+    "mtime": 1783593451.1816838,
+    "ast_hash": "e70c4c0d2ec2d1e4eb6ca7115dde5ae1",
+    "semantic_hash": ""
+  },
+  ".agents/rules/graphify.md": {
+    "mtime": 1783593116.2850251,
+    "ast_hash": "f1e53ecc9194573d3c28fc116c743a2e",
+    "semantic_hash": ""
+  },
+  ".agents/workflows/graphify.md": {
+    "mtime": 1783593116.285627,
+    "ast_hash": "0bc020d491fca99550c1ea3de0a5f862",
+    "semantic_hash": ""
+  },
+  "project.md": {
+    "mtime": 1783593301.030004,
+    "ast_hash": "ca658c85db30825943ccbe996705ec3e",
+    "semantic_hash": ""
+  },
+  "README.md": {
+    "mtime": 1783593877.506772,
+    "ast_hash": "5e4b45749e60fc91a79346aea4605c62",
+    "semantic_hash": ""
+  }
+}

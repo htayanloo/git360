@@ -1,0 +1,23 @@
+# Git-360 standalone workspace configuration
+
+# Ignore other projects in the monorepo root
+/AIEngineer/
+/AIEngineer_v1/
+/NextGen/
+/ansible-db-cluster/
+/ansible-db-cluster.zip
+/test/
+/Landingpage/
+
+# Go binaries and testing artifacts
+/git360
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Graphify output caching
+/graphify-out/cache/
