@@ -1,7 +1,9 @@
 package tui
 
 import (
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -11,6 +13,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
+
+const Version = "v0.2.0"
 
 type tickMsg time.Time
 
@@ -52,6 +56,7 @@ type AppModel struct {
 	IsFetching            bool
 	HorizontalSplitOffset int
 	VerticalSplitOffset   int
+	LatestVersion         string
 }
 
 func NewAppModel(client *git.Client) *AppModel {
@@ -70,6 +75,7 @@ func NewAppModel(client *git.Client) *AppModel {
 		PrevChangesMap:        make(map[string]git.FileChange),
 		HorizontalSplitOffset: 0,
 		VerticalSplitOffset:   0,
+		LatestVersion:         "",
 	}
 
 	// Try to initialize GitLab client from remote URL
@@ -439,7 +445,42 @@ func (m *AppModel) Init() tea.Cmd {
 		m.tickChan(),
 		m.checkGitStateCmd(),
 		m.loadGitLabDataCmd(),
+		m.checkUpdateCmd(),
 	)
+}
+
+type updateCheckFinishedMsg struct {
+	version string
+}
+
+func (m *AppModel) checkUpdateCmd() tea.Cmd {
+	return func() tea.Msg {
+		client := &http.Client{Timeout: 5 * time.Second}
+		req, err := http.NewRequest("GET", "https://api.github.com/repos/htayanloo/git360/releases/latest", nil)
+		if err != nil {
+			return nil
+		}
+		
+		req.Header.Set("User-Agent", "git360-update-checker")
+		resp, err := client.Do(req)
+		if err != nil {
+			return nil
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			return nil
+		}
+
+		var result struct {
+			TagName string `json:"tag_name"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			return nil
+		}
+
+		return updateCheckFinishedMsg{version: result.TagName}
+	}
 }
 
 func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -789,6 +830,9 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.DiffPane.SetContent(fmt.Sprintf("CI/CD Job %d Logs", msg.jobID), msg.logs, m.Styles)
 		}
 
+	case updateCheckFinishedMsg:
+		m.LatestVersion = msg.version
+
 	case errorMsg:
 		m.Err = msg.err
 		m.MetaPane.AddLog(fmt.Sprintf("Error: %v", msg.err))
@@ -1033,9 +1077,14 @@ func (m *AppModel) View() string {
 	bottomRow := lipgloss.JoinHorizontal(lipgloss.Top, diffView, metaView)
 
 	// 3. Assemble Header and Footer
-	headerText := fmt.Sprintf(" GIT-360  |  Active Branch: %s  |  Last update: %s", 
+	updateNotify := ""
+	if m.LatestVersion != "" && m.LatestVersion != Version {
+		updateNotify = fmt.Sprintf("  |  %s", m.Styles.HelpKeyStyle.Render("✨ Update available: "+m.LatestVersion))
+	}
+	headerText := fmt.Sprintf(" GIT-360  |  Active Branch: %s  |  Last update: %s%s", 
 		m.MetaPane.Branch, 
 		m.LastRefresh.Format("15:04:05"),
+		updateNotify,
 	)
 	header := m.Styles.HeaderStyle.Width(m.Width).Render(headerText)
 
